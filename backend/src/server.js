@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 
 import { createAmapProvider } from "./amap-provider.js";
 import { createAmapPlacesProvider } from "./amap-places.js";
@@ -68,6 +69,13 @@ async function main() {
     throw new Error(`unsupported MOTO_PROVIDER: ${providerMode}`);
   }
   const port = Number(process.env.PORT ?? 8787);
+  const host = process.env.HOST ?? "127.0.0.1";
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error("PORT must be an integer between 0 and 65535");
+  }
+  if (isIP(host) === 0) {
+    throw new Error("HOST must be an IPv4 or IPv6 address");
+  }
   const allowedOrigin = process.env.WEB_ORIGIN ?? "http://localhost:5173";
   const mapProvider = createMapTileProvider({
     url: process.env.MOTO_MAP_PMTILES_URL ?? (providerMode === "amap" ? "auto" : "disabled"),
@@ -78,8 +86,17 @@ async function main() {
   await mapProvider?.initialize();
   const server = createGateway({ provider, mapProvider, allowedOrigin, providerMode });
 
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`MOTO GPS gateway listening on http://127.0.0.1:${port} (${providerMode})`);
+  server.once("error", (error) => {
+    mapProvider?.close();
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+  server.listen(port, host, () => {
+    const address = server.address();
+    const listeningHost = address?.address ?? host;
+    const listeningPort = address?.port ?? port;
+    const urlHost = listeningHost.includes(":") ? `[${listeningHost}]` : listeningHost;
+    console.log(`MOTO GPS gateway listening on http://${urlHost}:${listeningPort} (${providerMode})`);
   });
 
   const close = () => { mapProvider?.close(); server.close(); };
